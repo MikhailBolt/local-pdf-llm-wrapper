@@ -1,30 +1,68 @@
+import os
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Ollama
-from langchain.chains import RetrievalQA
+from langchain_ollama import OllamaLLM
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate
 
-# 1. Загрузка и нарезка PDF
-loader = PyPDFLoader("docs/your_file.pdf") # Положи любой PDF в папку docs
-docs = loader.load()
+# Константы
+DB_FAISS_PATH = 'vectorstore/db_faiss'
+PDF_PATH = "docs/doc.pdf"
 
-# Режем на куски по 1000 символов с перекрытием, чтобы не терять смысл
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-splits = text_splitter.split_documents(docs)
+def prepare_vector_db():
+    if not os.path.exists(PDF_PATH):
+        print(f"Error: {PDF_PATH} not found!")
+        exit()
 
-# 2. Создаем "мозг" для поиска (Embeddings) - качается один раз (~400mb)
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# 3. Создаем векторную базу данных в памяти
-vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
+    # Если база уже создана — просто загружаем её
+    if os.path.exists(DB_FAISS_PATH):
+        print("--- Loading existing vector database... ---")
+        return FAISS.load_local(DB_FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
+    
+    # Если базы нет — создаем
+    print("--- Creating new vector database from PDF... ---")
+    loader = PyPDFLoader(PDF_PATH)
+    docs = loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    splits = text_splitter.split_documents(docs)
+    
+    vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
+    vectorstore.save_local(DB_FAISS_PATH)
+    return vectorstore
 
-# 4. Инициализируем модель и цепочку ответов
-llm = Ollama(model="llama3")
-qa_chain = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=vectorstore.as_retriever())
+# Инициализация
+vectorstore = prepare_vector_db()
+llm = OllamaLLM(model="llama3")
 
-# 5. Интерактив
-question = "What are the main conclusions of this document?"
-print(f"\nQuestion: {question}")
-response = qa_chain.invoke(question)
-print(f"\nAnswer:\n{response['result']}")
+system_prompt = (
+    "You are a professional AI Assistant. Use the context to answer. "
+    "If the answer is not in the context, say you don't know based on the document. "
+    "\n\n {context}"
+)
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", system_prompt),
+    ("human", "{input}"),
+])
+
+question_answer_chain = create_stuff_documents_chain(llm, prompt)
+rag_chain = create_retrieval_chain(vectorstore.as_retriever(), question_answer_chain)
+
+# --- Chat Loop ---
+print("\nReady! Ask me anything about the document (type 'exit' to quit):")
+while True:
+    query = input("\nYour Question: ")
+    if query.lower() in ['exit', 'quit', 'выход']:
+        break
+    
+    print("Thinking...")
+    try:
+        response = rag_chain.invoke({"input": query})
+        print(f"Answer: {response['answer']}")
+    except Exception as e:
+        print(f"Error connecting to Ollama: {e}. Is it running?")
