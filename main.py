@@ -62,7 +62,20 @@ while True:
     
     print("Thinking...")
     try:
+        # Теперь response содержит не только 'answer', но и 'context'
         response = rag_chain.invoke({"input": query})
-        print(f"Answer: {response['answer']}")
+        
+        print(f"\nAnswer: {response['answer']}")
+        
+        # Вытаскиваем уникальные номера страниц из метаданных
+        sources = set()
+        for doc in response.get("context", []):
+            page_num = doc.metadata.get("page", 0) + 1  # Индекс страниц в PDF начинается с 0
+            sources.add(page_num)
+        
+        if sources:
+            sorted_sources = sorted(list(sources))
+            print(f"Sources (Pages): {', '.join(map(str, sorted_sources))}")
+            
     except Exception as e:
         print(f"Error connecting to Ollama: {e}. Is it running?")
