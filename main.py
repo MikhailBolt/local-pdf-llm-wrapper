@@ -7,14 +7,14 @@ from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
 
 # --- Настройки ---
 DB_FAISS_PATH = 'vectorstore/db_faiss'
 PDF_PATH = "docs/doc.pdf"
 
 def prepare_vector_db():
-    # Создаем папки, если их нет
     os.makedirs("docs", exist_ok=True)
     os.makedirs("vectorstore", exist_ok=True)
 
@@ -25,31 +25,30 @@ def prepare_vector_db():
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
     if os.path.exists(DB_FAISS_PATH):
-        print("--- Loading Vector DB from disk... ---")
+        print("--- Loading Vector DB... ---")
         return FAISS.load_local(DB_FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
     
-    print("--- Creating new Vector DB (this may take a while)... ---")
+    print("--- Processing PDF... ---")
     loader = PyPDFLoader(PDF_PATH)
-    docs = loader.load()
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    splits = text_splitter.split_documents(docs)
-    
+    splits = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100).split_documents(loader.load())
     vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
     vectorstore.save_local(DB_FAISS_PATH)
     return vectorstore
 
 # --- Инициализация ---
 vectorstore = prepare_vector_db()
+# Добавляем аргумент для стриминга
 llm = OllamaLLM(model="llama3")
 
 system_prompt = (
-    "You are a professional AI Assistant. Use the provided context to answer accurately. "
-    "If the answer is not in the context, say you don't know based on the document. "
+    "You are a professional AI Assistant. Use the provided context to answer. "
+    "If unsure, say you don't know based on the document. "
     "\n\n {context}"
 )
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
+    MessagesPlaceholder(variable_name="chat_history"),
     ("human", "{input}"),
 ])
 
@@ -57,26 +56,35 @@ qa_chain = create_stuff_documents_chain(llm, prompt)
 rag_chain = create_retrieval_chain(vectorstore.as_retriever(), qa_chain)
 
 # --- Chat Loop ---
-print("\n[SUCCESS] System ready! Ask about your PDF (type 'exit' to quit):")
+chat_history = []
+print("\n[SUCCESS] AI Ready! Ask anything (type 'exit' to quit):")
 
 while True:
-    query = input("\n> Your Question: ")
-    if query.lower() in ['exit', 'quit', 'выход']:
-        break
+    query = input("\n> User: ")
+    if query.lower() in ['exit', 'quit', 'выход']: break
     
     start_time = time.time()
-    print("Thinking...")
+    print("AI is thinking...", end="\r")
     
     try:
-        response = rag_chain.invoke({"input": query})
-        end_time = time.time()
+        # Получаем ответ
+        response = rag_chain.invoke({
+            "input": query,
+            "chat_history": chat_history
+        })
         
-        print(f"\nAnswer: {response['answer']}")
+        print(f"AI Answer: {response['answer']}")
         
-        # Источники
+        # Обновляем историю (храним последние 5 сообщений)
+        chat_history.extend([
+            HumanMessage(content=query),
+            AIMessage(content=response['answer'])
+        ])
+        chat_history = chat_history[-10:] 
+
+        # Вывод источников и времени
         sources = sorted(list(set(doc.metadata.get("page", 0) + 1 for doc in response.get("context", []))))
-        print(f"Sources: Pages {', '.join(map(str, sources))}")
-        print(f"--- (Processing time: {end_time - start_time:.2f}s) ---")
+        print(f"[Pages: {', '.join(map(str, sources))}] | [{time.time() - start_time:.2f}s]")
             
     except Exception as e:
-        print(f"(X) Error: Check if Ollama is running. Detail: {e}")
+        print(f"(X) Error: {e}")
