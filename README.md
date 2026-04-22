@@ -57,7 +57,7 @@ cd local-pdf-llm-wrapper
 ### 2. Create virtual environment
 
 ```bash
-python -m venv venv
+py -m venv venv
 venv\Scripts\activate   # Windows
 # source venv/bin/activate  # Mac/Linux
 ```
@@ -86,6 +86,8 @@ ollama run llama3
 
 ### 1. Put your PDF
 
+You can use **a single PDF** or **a folder with multiple PDFs**.
+
 ```
 docs/doc.pdf
 ```
@@ -93,7 +95,7 @@ docs/doc.pdf
 ### 2. Run the app
 
 ```bash
-python main.py
+py main.py --docs-path docs
 ```
 
 ---
@@ -111,8 +113,8 @@ AI Answer: ...
 ## 🛠 CLI Options
 
 ```bash
-python main.py \
-  --pdf docs/doc.pdf \
+py main.py \
+  --docs-path docs \
   --model llama3 \
   --top-k 4 \
   --chunk-size 1000 \
@@ -127,11 +129,16 @@ python main.py \
 You can configure via `.env`:
 
 ```
-PDF_PATH=docs/doc.pdf
+DOCS_PATH=docs
 LLM_MODEL=llama3
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 TOP_K=4
+RETRIEVAL_TYPE=similarity
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=150
 ```
+
+Tip: copy `.env.example` → `.env` and adjust values.
 
 ---
 
@@ -143,6 +150,7 @@ local-pdf-llm-wrapper/
 ├── main.py
 ├── requirements.txt
 ├── README.md
+├── .env.example
 │
 ├── docs/              # PDF files
 ├── logs/              # chat logs
@@ -166,7 +174,6 @@ local-pdf-llm-wrapper/
 
 - [ ] Real streaming from LLM (not simulated)
 - [ ] Web UI (Streamlit / FastAPI)
-- [ ] Multi-PDF support
 - [ ] Hybrid search (BM25 + embeddings)
 - [ ] Evaluation metrics (RAG quality)
 - [ ] Chunk caching optimization

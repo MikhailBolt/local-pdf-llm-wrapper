@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment
+.env
+
+# Local artifacts
+logs/
+vectorstore/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
