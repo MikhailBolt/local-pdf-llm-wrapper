@@ -4,6 +4,8 @@ import json
 import time
 import hashlib
 import argparse
+import urllib.request
+import urllib.error
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
@@ -30,6 +32,7 @@ DEFAULT_SESSION_FILE = "logs/session_history.json"
 DEFAULT_MANIFEST_FILE = "vectorstore/index_manifest.json"
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_LLM_MODEL = "llama3"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_CHUNK_SIZE = 1000
 DEFAULT_CHUNK_OVERLAP = 150
 DEFAULT_TOP_K = 4
@@ -91,6 +94,11 @@ def parse_args() -> argparse.Namespace:
         help="Ollama model name"
     )
     parser.add_argument(
+        "--ollama-url",
+        default=os.getenv("OLLAMA_URL", DEFAULT_OLLAMA_URL),
+        help="Ollama base URL, e.g. http://localhost:11434"
+    )
+    parser.add_argument(
         "--chunk-size",
         type=int,
         default=int(os.getenv("CHUNK_SIZE", DEFAULT_CHUNK_SIZE)),
@@ -143,6 +151,35 @@ def parse_args() -> argparse.Namespace:
     )
 
     return parser.parse_args()
+
+
+def check_ollama_server(ollama_url: str, model_name: str) -> None:
+    base = ollama_url.rstrip("/")
+    tags_url = f"{base}/api/tags"
+
+    try:
+        with urllib.request.urlopen(tags_url, timeout=3) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError) as e:
+        print("(X) Ollama server is not reachable.")
+        print(f"    URL: {base}")
+        print(f"    Error: {e}")
+        print("    Start Ollama and try again, e.g.:")
+        print(f"      ollama run {model_name}")
+        sys.exit(1)
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        # If Ollama is reachable but response isn't JSON (very unlikely), don't block startup.
+        return
+
+    models = data.get("models", [])
+    available_names = {m.get("name") for m in models if isinstance(m, dict)}
+    if available_names and model_name not in available_names:
+        print(f"(!) Ollama is running, but model '{model_name}' is not listed in /api/tags.")
+        print("    You may need to pull it first, e.g.:")
+        print(f"      ollama run {model_name}")
 
 
 def get_log_file_path(log_dir: str) -> Path:
@@ -367,8 +404,18 @@ def load_or_create_vectorstore(args: argparse.Namespace, pdf_files: List[Path]) 
         )
 
 
-def create_rag_chain(vectorstore: FAISS, model_name: str, top_k: int, retrieval_type: str):
-    llm = OllamaLLM(model=model_name)
+def create_rag_chain(
+    vectorstore: FAISS,
+    model_name: str,
+    top_k: int,
+    retrieval_type: str,
+    ollama_url: str,
+):
+    try:
+        llm = OllamaLLM(model=model_name, base_url=ollama_url)
+    except TypeError:
+        # Backward/forward compatibility with different langchain-ollama versions.
+        llm = OllamaLLM(model=model_name)
 
     system_prompt = (
         "You are a professional AI assistant for answering questions about local PDF documents.\n"
@@ -475,6 +522,7 @@ def print_status(args: argparse.Namespace, loaded_documents: List[str], history_
     print(f"Docs path: {args.docs_path}")
     print(f"Loaded PDFs: {len(loaded_documents)}")
     print(f"Model: {args.model}")
+    print(f"Ollama URL: {args.ollama_url}")
     print(f"Embedding model: {args.embedding_model}")
     print(f"Vector DB: {args.db}")
     print(f"Manifest file: {args.manifest_file}")
@@ -491,6 +539,7 @@ def print_startup_info(args: argparse.Namespace, loaded_history_count: int, load
     print(f"Docs path: {args.docs_path}")
     print(f"Loaded PDFs: {len(loaded_documents)}")
     print(f"Model: {args.model}")
+    print(f"Ollama URL: {args.ollama_url}")
     print(f"Embedding model: {args.embedding_model}")
     print(f"Vector DB: {args.db}")
     print(f"Top-K: {args.top_k}")
@@ -517,6 +566,8 @@ def main() -> None:
     ensure_directories(args.log_dir, args.docs_path, args.db, args.manifest_file)
     pdf_files = collect_pdf_files(args.docs_path)
 
+    check_ollama_server(args.ollama_url, args.model)
+
     try:
         vectorstore, loaded_documents = load_or_create_vectorstore(args, pdf_files)
     except Exception as e:
@@ -528,7 +579,8 @@ def main() -> None:
             vectorstore=vectorstore,
             model_name=args.model,
             top_k=args.top_k,
-            retrieval_type=args.retrieval_type
+            retrieval_type=args.retrieval_type,
+            ollama_url=args.ollama_url,
         )
     except Exception as e:
         print(f"(X) Failed to initialize LLM/RAG chain: {e}")
@@ -590,7 +642,8 @@ def main() -> None:
                     vectorstore=vectorstore,
                     model_name=args.model,
                     top_k=args.top_k,
-                    retrieval_type=args.retrieval_type
+                    retrieval_type=args.retrieval_type,
+                    ollama_url=args.ollama_url,
                 )
                 print("(i) Vector index rebuilt successfully.")
             except Exception as e:

@@ -131,6 +131,7 @@ You can configure via `.env`:
 ```
 DOCS_PATH=docs
 LLM_MODEL=llama3
+OLLAMA_URL=http://localhost:11434
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 TOP_K=4
 RETRIEVAL_TYPE=similarity
